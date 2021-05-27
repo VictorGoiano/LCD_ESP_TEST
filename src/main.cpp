@@ -36,8 +36,14 @@ int buttonPressBSET = 0,buttonPressBDIS = 0, refreshVisor = 0;         // variab
 int visor = 0, visorAnt = 0;
 
 // Network parameters
-const char* ssid = "Tim Live Victor";
-const char* password = "pontes309vpm";
+const char* ssid = "pontes";
+const char* password = "12345678";
+
+// Set web server at port 80
+WiFiServer server(80);
+
+// Storing the HTTP request
+String header;
 
 // Button PIN
 const int BSET = D1;
@@ -55,7 +61,7 @@ LiquidCrystal lcd(RS, EN, d4, d5, d6, d7);
 // Funções PID
 void iniciaMCP(){
   //initialize the variables we're linked to
-  Input = valoresRegistros[ROTACAO_MCP];    //Input = analogRead(PIN_INPUT);
+  Input = valoresRegistros[ROTACAO_MCP];
   Setpoint = 50;
 
   //turn the PID on
@@ -74,11 +80,11 @@ void paraMCP(){
 }
 
 void processaPID(){
-  Input = valoresRegistros[ROTACAO_MCP];      //Input = analogRead(PIN_INPUT);
+  Input = valoresRegistros[ROTACAO_MCP];
 
   myPID.Compute();
 
-  valoresRegistros[POS_ATUADOR] = Output;     //analogWrite(PIN_OUTPUT, Output);
+  valoresRegistros[POS_ATUADOR] = Output;
 }
 //------------------------------------
 
@@ -113,6 +119,87 @@ void updateReg(){
     mb.Coil(OFFSET_COIL, (bool) valoresRegistros[ESTADO_MCP] );
     mb.Coil(OFFSET_COIL + 1, (bool) valoresRegistros[COMANDO_ONOFF_MCP] );
   //}
+}
+
+void serverTask() {
+  WiFiClient client = server.available();   // listen for incoming clients
+
+  if (client) {                             // if a new client connects,
+    Serial.println("New Client.");
+    String currentLine = "";                // 'currentLine' stores the current line of the request
+
+    while (client.connected()) {
+      if (client.available()) {             // checks if there are unread characters from the request
+
+        char c = client.read();             // c stores the current character we are reading
+        Serial.write(c);
+        header += c;                        // we'll store the entire request in 'header'
+
+        if (c == '\n') {
+          if (currentLine.length() == 0) { 
+            /* Note that we'll only enter this conditional with a double line break
+            ('\n' on empty line) which signifies the end of an http request */
+
+            /* HTTP headers always start with a response code (e.g. HTTP/1.1 200 OK)
+            and a content-type, followed by a blank line */
+            client.println("HTTP/1.1 200 OK");
+            client.println("Content-type:text/html");
+            client.println("Connection: close");
+            client.println();
+            
+            // if the request does not contain 'GET /xxx/' req will be set to -1
+            int req = header.indexOf("GET /cmd/");
+            if (req >= 0) {
+              // header.substring(9, 12).toInt();
+              char cmd = header[9] - 0x30;     // convert chars 9 to number
+              if( cmd == 1 )
+                iniciaMCP();
+              else
+                paraMCP();
+            }
+            // test -----------------------------------
+            req = header.indexOf("GET /app"); 
+            if (req >= 0) {
+              for (int i = 0; i < TOTAL_VAR; i++) {
+                client.print(valoresRegistros[i]);
+                client.print(", ");
+              }
+              client.print("n");
+            }
+            else {
+              // displaying HTML webpage
+              client.println("<!DOCTYPE html><html>");
+              client.println("<head><title>LCD_ESP TEST</title></head>");
+              client.println("<body>");
+                // test -----------------------------------
+              client.print("<p>STATUS: ");
+              for (int i = 0; i < TOTAL_VAR; i++) {
+                client.print(valoresRegistros[i]);
+                client.print(" ");
+              }
+              // test -----------------------------------
+              client.println("</p>");
+              client.println("</body>");
+              client.println("</html>");
+              client.println();           // http response ends with blank line
+            }
+            break;
+          } 
+          else 
+            currentLine = "";   //currentLine == "";
+
+        } else if (c != '\r') {  // if you got anything else but a carriage return character,
+          currentLine += c;      // add it to the end of the currentLine
+        }
+      }
+    }
+
+    // Ends connection and clears the header
+    header = "";
+    client.stop();
+    Serial.println("Client disconnected.");
+    Serial.println("");
+  }
 }
 
 void updateVisor() {
@@ -223,6 +310,8 @@ void setup() {
   lcd.print("conectado");
   visor = ROTACAO_MCP;
 
+  server.begin();
+
   mb.server();
 
   //mb2.client();
@@ -249,7 +338,10 @@ void loop() {
   //Atualiza LCD
   updateVisor();
 
-  updateReg();    //mb.Hreg(LEME_HREG, valorLeme);
+  updateReg();
+
+  //Server port 80 process
+  serverTask();
 
   //Call once inside loop() - all magic here
   mb.task();
